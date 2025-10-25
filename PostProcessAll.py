@@ -23,6 +23,7 @@ defaultSettings = {
     "endCodes" : "M5 M9 M30",
     "onlySelected" : False,
     "skipFirstToolchange" : False,
+    "appendOriginLocation" : True,
     # Groups are expanded or not
     "groupPersonal" : True,
     "groupPost" : False,
@@ -557,6 +558,21 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                 "This is useful when the first tool is already loaded in the "
                 "spindle and you don't want to generate unnecessary tool change "
                 "commands at the beginning of the program.")
+
+            # check box to append origin location to filename
+            input = inputGroup.children.addBoolValueInput("appendOriginLocation",
+                                                          "Append origin location to filename",
+                                                          True,
+                                                          "",
+                                                          docSettings.get("appendOriginLocation", True))
+            input.tooltip = "Add Origin Location to Filename"
+            input.tooltipDescription = (
+                "Append the WCS origin location to the filename based on the stock point setting. "
+                "For example, if the origin is at the back-right corner on top of the stock, "
+                "'-BR-TOP' will be added to the filename. Corner positions are: FL (Front-Left), "
+                "FR (Front-Right), BL (Back-Left), BR (Back-Right). If the origin is at the center "
+                "in XY, only the Z position will be added (e.g., '-TOP' or '-BOT'). If the origin "
+                "is fully custom, nothing will be appended.")
            
             inputGroup.isExpanded = docSettings["groupPersonal"]
 
@@ -786,6 +802,150 @@ class CommandExecuteHandler(adsk.core.CommandEventHandler):
             PerformPostProcess(self.docSettings, self.selectedSetups)
 
 
+def GetOriginLocationSuffix(setup, debugComments=None):
+    """
+    Analyze the setup's WCS origin relative to stock and return a filename suffix.
+    Returns a string like "-FL-TOP" (Front-Left, Top), "-BR-BOT" (Back-Right, Bottom),
+    "-TOP", "-BOT", or empty string if custom location.
+    debugComments is a list that will be populated with debug info if provided.
+    """
+    try:
+        if debugComments is not None:
+            debugComments.append("(DEBUG: Analyzing origin location for setup: {})\n".format(setup.name))
+            # List all attributes of setup for debugging
+            attrs = [attr for attr in dir(setup) if not attr.startswith('_')]
+            debugComments.append("(DEBUG: Setup attributes: {})\n".format(", ".join(attrs[:20])))  # first 20
+            if len(attrs) > 20:
+                debugComments.append("(DEBUG: Setup attributes (cont): {})\n".format(", ".join(attrs[20:40])))
+            if len(attrs) > 40:
+                debugComments.append("(DEBUG: Setup attributes (cont): {})\n".format(", ".join(attrs[40:])))
+        
+        # Try to access the WCS (Work Coordinate System)
+        # The stock offset point is typically in setup.parameters
+        parameters = setup.parameters
+        if debugComments is not None:
+            debugComments.append("(DEBUG: setup.parameters exists = {})\n".format(parameters is not None))
+        
+        if not parameters:
+            return ""
+            
+        # Look for stock-related parameters
+        stockPoint = None
+        
+        # Try common parameter names for stock point settings
+        paramNames = ['wcs_origin_boxPoint', 'job_stockPointX', 'job_stockPointY', 'job_stockPointZ',
+                      'wcs_stock_point', 'stockPoint']
+        
+        if debugComments is not None:
+            debugComments.append("(DEBUG: Looking for stock point parameters...)\n")
+            
+        for paramName in paramNames:
+            try:
+                param = parameters.itemByName(paramName)
+                if param:
+                    if debugComments is not None:
+                        debugComments.append("(DEBUG: Found parameter: {} = {})\n".format(paramName, param.value.value))
+            except:
+                pass
+        
+        # The actual parameter is likely 'wcs_origin_boxPoint' which is an enum
+        try:
+            boxPointParam = parameters.itemByName('wcs_origin_boxPoint')
+            if boxPointParam:
+                stockPoint = boxPointParam.value.value
+                if debugComments is not None:
+                    debugComments.append("(DEBUG: wcs_origin_boxPoint value = {})\n".format(stockPoint))
+                    debugComments.append("(DEBUG: wcs_origin_boxPoint type = {})\n".format(type(stockPoint).__name__))
+        except Exception as e:
+            if debugComments is not None:
+                debugComments.append("(DEBUG: Error accessing wcs_origin_boxPoint: {})\n".format(str(e)))
+        
+        if not stockPoint:
+            if debugComments is not None:
+                debugComments.append("(DEBUG: stockPoint is None, trying alternative approach)\n")
+                # Try to list all parameters
+                try:
+                    allParams = []
+                    for i in range(min(parameters.count, 30)):  # first 30 params
+                        param = parameters.item(i)
+                        allParams.append(param.name)
+                    debugComments.append("(DEBUG: Available parameters: {})\n".format(", ".join(allParams)))
+                except:
+                    pass
+            return ""
+        
+        # The stockPoint value is a string like "top 4" or "bottom 6"
+        # Format appears to be: "[top|bottom] [0-9]"
+        # Where the number represents the XY corner position
+        
+        if debugComments is not None:
+            debugComments.append("(DEBUG: stockPoint string value = '{}', type = {})\n".format(stockPoint, type(stockPoint).__name__))
+        
+        # Parse the string to extract Z position and corner number
+        stockPointStr = str(stockPoint).lower().strip()
+        parts = stockPointStr.split()
+        
+        if debugComments is not None:
+            debugComments.append("(DEBUG: Parsed parts = {})\n".format(parts))
+        
+        if len(parts) < 2:
+            if debugComments is not None:
+                debugComments.append("(DEBUG: Could not parse stockPoint string)\n")
+            return ""
+        
+        zPos = parts[0]  # "top" or "bottom"
+        try:
+            cornerNum = int(parts[1])  # 0-9
+        except:
+            if debugComments is not None:
+                debugComments.append("(DEBUG: Could not parse corner number)\n")
+            return ""
+        
+        if debugComments is not None:
+            debugComments.append("(DEBUG: Z position = '{}', corner number = {})\n".format(zPos, cornerNum))
+        
+        # Map corner numbers to XY positions
+        # 0 = Center, 1 = Front-Left, 2 = Front-Right, 3 = Back-Left, 4 = Back-Right
+        cornerMap = {
+            0: "",      # Center (no XY suffix)
+            1: "FL",    # Front-Left
+            2: "FR",    # Front-Right
+            3: "BL",    # Back-Left
+            4: "BR"     # Back-Right
+        }
+        
+        xyPos = cornerMap.get(cornerNum, None)
+        
+        if xyPos is None:
+            if debugComments is not None:
+                debugComments.append("(DEBUG: Unknown corner number: {})\n".format(cornerNum))
+            return ""
+        
+        # Build the suffix
+        suffix = ""
+        if zPos == "top":
+            if xyPos:
+                suffix = "-" + xyPos + "-TOP"
+            else:
+                suffix = "-TOP"
+        elif zPos == "bottom":
+            if xyPos:
+                suffix = "-" + xyPos + "-BOT"
+            else:
+                suffix = "-BOT"
+        
+        if debugComments is not None:
+            debugComments.append("(DEBUG: Final suffix = '{}')\n".format(suffix))
+        
+        return suffix
+        
+    except Exception as e:
+        # If any error occurs, log it and return empty string
+        if debugComments is not None:
+            debugComments.append("(DEBUG: ERROR in GetOriginLocationSuffix: {})\n".format(str(e)))
+        return ""
+
+
 def PerformPostProcess(docSettings, setups):
     ui = None
     progress = None
@@ -913,12 +1073,19 @@ def PerformPostProcess(docSettings, setups):
                         else:
                             fname = seqStr + ' ' + fname
 
+                    # append origin location suffix based on WCS relative to stock
+                    if docSettings.get("appendOriginLocation", True):
+                        # debugComments = []  # Set to [] to enable debug output in G-code files
+                        originSuffix = GetOriginLocationSuffix(setup, None)
+                        if originSuffix:
+                            fname = fname + originSuffix
+
                     # append NOFIRSTTOOL if skipFirstToolchange is enabled
                     if docSettings["skipFirstToolchange"] and docSettings["splitSetup"]:
                         fname = fname + "-NOFIRSTTOOL"
 
                     # post the file
-                    status = PostProcessSetup(fname, setup, setupFolder, docSettings, program)
+                    status = PostProcessSetup(fname, setup, setupFolder, docSettings, program, None)
                     if status == None:
                         cntFiles += 1
                     else:
@@ -953,7 +1120,7 @@ def PerformPostProcess(docSettings, setups):
         if ui:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
 
-def PostProcessSetup(fname, setup, setupFolder, docSettings, program):
+def PostProcessSetup(fname, setup, setupFolder, docSettings, program, debugComments=None):
     ui = None
     fileHead = None
     fileBody = None
@@ -973,6 +1140,15 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings, program):
         try:
             pathlib.Path(setupFolder).mkdir(parents=True, exist_ok=True)
             fileHead = open(path, "w")
+            
+            # Write debug comments at the top of the file if available
+            if debugComments and len(debugComments) > 0:
+                fileHead.write("(========== DEBUG INFORMATION ==========)\n")
+                for comment in debugComments:
+                    fileHead.write(comment)
+                fileHead.write("(========================================)\n")
+                fileHead.write("\n")
+                
         except Exception as exc:
             return "Unable to create output file '" + path + "'. Make sure the setup name is valid as a file name."
         
