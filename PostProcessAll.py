@@ -913,6 +913,10 @@ def PerformPostProcess(docSettings, setups):
                         else:
                             fname = seqStr + ' ' + fname
 
+                    # append NOFIRSTTOOL if skipFirstToolchange is enabled
+                    if docSettings["skipFirstToolchange"] and docSettings["splitSetup"]:
+                        fname = fname + "-NOFIRSTTOOL"
+
                     # post the file
                     status = PostProcessSetup(fname, setup, setupFolder, docSettings, program)
                     if status == None:
