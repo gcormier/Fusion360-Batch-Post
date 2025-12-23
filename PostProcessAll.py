@@ -17,6 +17,7 @@ defaultSettings = {
     "delFiles" : False,
     "delFolder" : False,
     "splitSetup" : False,
+    "combineTool" : False,
     "fastZ" : False,
     "toolChange" : "M9 G30",
     "numericName" : False,
@@ -43,6 +44,7 @@ constPostProcessControlId = "IronPostProcess"
 constCAMProductId = "CAMProductType"
 constAttrGroup = constCmdDefId
 constAttrName = "settings"
+constAttrCompressedName = "CompressedName"
 constSettingsFileExt = ".settings"
 constPostLoopDelay = 0.1
 constBodyTmpFile = "gcodeBody"
@@ -332,7 +334,9 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                 ncInput.displayName = constNcProgramName
                 program = programs.add(ncInput)
                 program.postConfiguration = program.postConfiguration
-                AssignOutputFolder(program.parameters, ExpandFileName(docSettings["output"]))
+                outputFolder = docSettings["output"]
+                program.attributes.add(constAttrGroup, constAttrCompressedName, outputFolder)
+                AssignOutputFolder(program.parameters, ExpandFileName(outputFolder))
                 program.parameters.itemByName("nc_program_createInBrowser").value.value = True
             elif programs.count == 1:
                 program = programs.item(0)
@@ -368,7 +372,7 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                                                    adsk.core.DropDownStyles.TextListDropDownStyle)
             for listItem in programs:
                 input.listItems.add(listItem.name, listItem.name == program.name)
-            input.isFullWidth = True
+            #input.isFullWidth = True
             input.tooltip = "NC Program to Use"
             input.tooltipDescription = (
                 "Post processing will use the settings from the selected NC Program."
@@ -470,6 +474,21 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                 "grouped back together into the same file, eliminating this "
                 "limitation. You will get an error if there is a tool change "
                 "in a setup and this options is not selected.")
+
+            # check box to combine operation that use the same tool
+            input = inputGroup.children.addBoolValueInput("combineTool",
+                                                          "Combine operations using same tool",
+                                                          True,
+                                                          "",
+                                                          docSettings["combineTool"])
+            input.isEnabled = docSettings["splitSetup"] # enable only if using individual operations
+            input.tooltip = "Combine Consecutive Operations That Use the Same Tool"
+            input.tooltipDescription = (
+                "If consecutive operations use the same tool, have Fusion generate "
+                "their output together. This can optimize G-code for some routers. "
+                "However, it will cause the logic that restores rapid moves to also "
+                "treat it as one operation, which can have negative effects if the "
+                "feed heights for the operations are different.")
 
             # text box as a label for tool change command
             input = inputGroup.children.addTextBoxCommandInput("toolLabel", 
@@ -748,6 +767,7 @@ class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
 
             # Options for splitSetup
             if input.id == "splitSetup":
+                inputs.itemById("combineTool").isEnabled = input.value
                 inputs.itemById("toolChange").isEnabled = input.value
                 inputs.itemById("toolLabel").isEnabled = input.value
                 inputs.itemById("endCodes").isEnabled = input.value
@@ -973,12 +993,14 @@ def PerformPostProcess(docSettings, setups):
             pathlib.Path(outputFolder).mkdir(exist_ok=True)
         except Exception as exc:
             # see if we can map it to folder with compressed user
-            compressedName = docSettings["output"]
+            compressedName = program.attributes.itemByName(constAttrGroup, constAttrCompressedName).value
             if compressedName[0] == "~" and compressedName[1:] == outputFolder[-(len(compressedName) - 1):]:
                 # yes, it matches
                 outputFolder = ExpandFileName(compressedName)
 
-        docSettings["output"] = CompressFileName(outputFolder)
+        compressedName = CompressFileName(outputFolder)
+        program.attributes.add(constAttrGroup, constAttrCompressedName, compressedName)
+        docSettings["output"] = compressedName
 
         # Save settings in document attributes
         settingsMgr.SaveSettings(doc.attributes, docSettings)
@@ -1243,7 +1265,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings, program, debugComme
             # Look ahead for operations without a toolpath. This can happen
             # with a manual operation. Group it with current operation.
             # Or if first, group it with subsequent ones.
-            # Also group together operations with the same tool number
+            # Also optionally group together operations with the same tool number
             opHasTool = None
             curTool = -1
             hasTool = op.hasToolpath
@@ -1254,7 +1276,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings, program, debugComme
             while i < ops.count:
                 op = ops[i]
                 if not op.isSuppressed:
-                    if op.hasToolpath and op.tool.parameters.itemByName("tool_number").value.value != curTool:
+                    if op.hasToolpath and (not docSettings["combineTool"] or op.tool.parameters.itemByName("tool_number").value.value != curTool):
                         if not hasTool:
                             opList.append(op)
                             opHasTool = op
