@@ -1009,7 +1009,6 @@ def PerformPostProcess(docSettings, setups):
 
             progress = ui.createProgressDialog()
             progress.isCancelButtonShown = True
-            progressMsg = "{} files written to " + outputFolder
             progress.show("Post Processing...", "", 0, len(setups))
             progress.progressValue = 1 # try to get it to display
             progress.progressValue = 0
@@ -1088,7 +1087,7 @@ def PerformPostProcess(docSettings, setups):
                         lstSkipped += f"\nFailed on setup {setup.name}: {status}"
                         
                 cntSetups += 1
-                progress.message = progressMsg.format(cntFiles)
+                progress.message = f"{cntFiles} files written to {outputFolder}"
                 progress.progressValue = cntSetups
 
             progress.hide()
