@@ -5,7 +5,7 @@ import adsk.core, adsk.fusion, adsk.cam, traceback, shutil, json, os, os.path, t
 
 # Version number of settings as saved in documents and settings file
 # update this whenever settings content changes
-version = 11
+version = 12
 
 # Initial default values of settings
 defaultSettings = {
@@ -17,6 +17,7 @@ defaultSettings = {
     "delFiles" : False,
     "delFolder" : False,
     "splitSetup" : False,
+    "combineSetups" : False,
     "fastZ" : False,
     "toolChange" : "M9 G30",
     "numericName" : False,
@@ -471,6 +472,24 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                 "limitation. You will get an error if there is a tool change "
                 "in a setup and this options is not selected.")
 
+            # check box to combine setups into one file with tool optimization
+            input = inputGroup.children.addBoolValueInput("combineSetups",
+                                                          "Combine setups (minimize tool changes)",
+                                                          True,
+                                                          "",
+                                                          docSettings.get("combineSetups", False))
+            input.isEnabled = docSettings["splitSetup"] # enable only if using individual operations
+            input.tooltip = "Combine Multiple Setups Into One File"
+            input.tooltipDescription = (
+                "Combine all selected setups into a single output file, reordering "
+                "operations by tool number to minimize tool changes. Operations using "
+                "the same tool across different setups will be grouped together. "
+                "Your post processor will output the correct WCS (G54, G55, etc.) "
+                "for each operation based on the setup's WCS setting."
+                "<p>For example, if Setup 1 uses T1, T2, T5 and Setup 2 uses T1, T2, T4, "
+                "the output will run all T1 operations (from both setups), then T2, etc.</p>"
+                "<p>Requires 'Use individual operations' to be enabled.</p>")
+
             # text box as a label for tool change command
             input = inputGroup.children.addTextBoxCommandInput("toolLabel", 
                                                                "", 
@@ -754,6 +773,26 @@ class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
                 inputs.itemById("endLabel").isEnabled = input.value
                 inputs.itemById("fastZ").isEnabled = input.value
                 inputs.itemById("skipFirstToolchange").isEnabled = input.value
+                inputs.itemById("combineSetups").isEnabled = input.value
+                # If splitSetup is disabled, also disable combineSetups
+                if not input.value:
+                    inputs.itemById("combineSetups").value = False
+                    self.docSettings["combineSetups"] = False
+
+            # combineSetups requires splitSetup
+            if input.id == "combineSetups":
+                if input.value and not inputs.itemById("splitSetup").value:
+                    # Auto-enable splitSetup when combineSetups is checked
+                    inputs.itemById("splitSetup").value = True
+                    self.docSettings["splitSetup"] = True
+                    # Enable the splitSetup dependent controls
+                    inputs.itemById("toolChange").isEnabled = True
+                    inputs.itemById("toolLabel").isEnabled = True
+                    inputs.itemById("endCodes").isEnabled = True
+                    inputs.itemById("endLabel").isEnabled = True
+                    inputs.itemById("fastZ").isEnabled = True
+                    inputs.itemById("skipFirstToolchange").isEnabled = True
+                    inputs.itemById("combineSetups").isEnabled = True
 
         except:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
@@ -1019,86 +1058,101 @@ def PerformPostProcess(docSettings, setups):
             progress.progressValue = 1 # try to get it to display
             progress.progressValue = 0
 
-            cntSetups = 0
-            seqDict = dict()
+            # Check if we should combine setups into one file
+            if docSettings.get("combineSetups", False) and len(setups) > 1:
+                # Use combined processing mode
+                progress.message = "Combining setups..."
+                status = PostProcessCombinedSetups(setups, outputFolder, docSettings, program, progress)
+                if status == None:
+                    cntFiles = 1
+                else:
+                    cntSkipped = len(setups)
+                    lstSkipped = status
+                progress.hide()
+                # restore program output folder
+                AssignOutputFolder(parameters, outputFolder)
+            else:
+                # Normal per-setup processing
+                cntSetups = 0
+                seqDict = dict()
 
-            # We pass through all setups even if only some are selected
-            # so numbering scheme doesn't change.
-            for setup in cam.setups:
-                if progress.wasCancelled:
-                    break
-                if not setup.isSuppressed and setup.allOperations.count != 0:
-                    nameList = setup.name.split(':')    # folder separator
-                    setupFolder = outputFolder
-                    cnt = len(nameList) - 1
-                    i = 0
-                    while i < cnt:
-                        setupFolder += "/" + nameList[i].strip()
-                        i += 1
-                
-                    # keep a separate sequence number for each folder
-                    if setupFolder in seqDict:
-                        seqDict[setupFolder] += 1
-                        # skip if we're not actually including this setup
-                        if setup not in setups:
-                            continue
-                    else:
-                        # first file for this folder
-                        seqDict[setupFolder] = 1
-                        # skip if we're not actually including this setup
-                        if setup not in setups:
-                            continue
-
-                        if (docSettings["delFiles"]):
-                            # delete all the files in the folder
-                            try:
-                                for entry in os.scandir(setupFolder):
-                                    if entry.is_file():
-                                        try:
-                                            os.remove(entry.path)
-                                        except:
-                                            pass #ignore errors
-                            except:
-                                pass #ignore errors
-
-                    # prepend sequence number if enabled
-                    fname = nameList[i].strip()
-                    if docSettings["sequence"] or docSettings["numericName"]:
-                        seq = seqDict[setupFolder]
-                        seqStr = str(seq)
-                        if docSettings["twoDigits"] and seq < 10:
-                            seqStr = "0" + seqStr
-                        if docSettings["numericName"]:
-                            fname = seqStr
+                # We pass through all setups even if only some are selected
+                # so numbering scheme doesn't change.
+                for setup in cam.setups:
+                    if progress.wasCancelled:
+                        break
+                    if not setup.isSuppressed and setup.allOperations.count != 0:
+                        nameList = setup.name.split(':')    # folder separator
+                        setupFolder = outputFolder
+                        cnt = len(nameList) - 1
+                        i = 0
+                        while i < cnt:
+                            setupFolder += "/" + nameList[i].strip()
+                            i += 1
+                    
+                        # keep a separate sequence number for each folder
+                        if setupFolder in seqDict:
+                            seqDict[setupFolder] += 1
+                            # skip if we're not actually including this setup
+                            if setup not in setups:
+                                continue
                         else:
-                            fname = seqStr + ' ' + fname
+                            # first file for this folder
+                            seqDict[setupFolder] = 1
+                            # skip if we're not actually including this setup
+                            if setup not in setups:
+                                continue
 
-                    # append origin location suffix based on WCS relative to stock
-                    if docSettings.get("appendOriginLocation", True):
-                        # debugComments = []  # Set to [] to enable debug output in G-code files
-                        originSuffix = GetOriginLocationSuffix(setup, None)
-                        if originSuffix:
-                            fname = fname + originSuffix
+                            if (docSettings["delFiles"]):
+                                # delete all the files in the folder
+                                try:
+                                    for entry in os.scandir(setupFolder):
+                                        if entry.is_file():
+                                            try:
+                                                os.remove(entry.path)
+                                            except:
+                                                pass #ignore errors
+                                except:
+                                    pass #ignore errors
 
-                    # append NOFIRSTTOOL if skipFirstToolchange is enabled
-                    if docSettings["skipFirstToolchange"] and docSettings["splitSetup"]:
-                        fname = fname + "-NOFIRSTTOOL"
+                        # prepend sequence number if enabled
+                        fname = nameList[i].strip()
+                        if docSettings["sequence"] or docSettings["numericName"]:
+                            seq = seqDict[setupFolder]
+                            seqStr = str(seq)
+                            if docSettings["twoDigits"] and seq < 10:
+                                seqStr = "0" + seqStr
+                            if docSettings["numericName"]:
+                                fname = seqStr
+                            else:
+                                fname = seqStr + ' ' + fname
 
-                    # post the file
-                    status = PostProcessSetup(fname, setup, setupFolder, docSettings, program, None)
-                    if status == None:
-                        cntFiles += 1
-                    else:
-                        cntSkipped += 1
-                        lstSkipped += "\nFailed on setup " + setup.name + ": " + status
+                        # append origin location suffix based on WCS relative to stock
+                        if docSettings.get("appendOriginLocation", True):
+                            # debugComments = []  # Set to [] to enable debug output in G-code files
+                            originSuffix = GetOriginLocationSuffix(setup, None)
+                            if originSuffix:
+                                fname = fname + originSuffix
+
+                        # append NOFIRSTTOOL if skipFirstToolchange is enabled
+                        if docSettings["skipFirstToolchange"] and docSettings["splitSetup"]:
+                            fname = fname + "-NOFIRSTTOOL"
+
+                        # post the file
+                        status = PostProcessSetup(fname, setup, setupFolder, docSettings, program, None)
+                        if status == None:
+                            cntFiles += 1
+                        else:
+                            cntSkipped += 1
+                            lstSkipped += "\nFailed on setup " + setup.name + ": " + status
                         
-                cntSetups += 1
-                progress.message = progressMsg.format(cntFiles)
-                progress.progressValue = cntSetups
+                    cntSetups += 1
+                    progress.message = progressMsg.format(cntFiles)
+                    progress.progressValue = cntSetups
 
-            progress.hide()
-            # restore program output folder
-            AssignOutputFolder(parameters, outputFolder)
+                progress.hide()
+                # restore program output folder
+                AssignOutputFolder(parameters, outputFolder)
 
         # done with setups, report results
         if cntSkipped != 0:
@@ -1119,6 +1173,552 @@ def PerformPostProcess(docSettings, setups):
             progress.hide()
         if ui:
             ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
+
+
+def PostProcessCombinedSetups(setups, outputFolder, docSettings, program, progress):
+    """
+    Combine multiple setups into a single output file, reordering operations
+    by tool number to minimize tool changes. Operations using the same tool
+    across different setups will be grouped together.
+    
+    Returns None on success, or an error message string on failure.
+    """
+    ui = None
+    fileHead = None
+    fileBody = None
+    fileOp = None
+    retVal = "Fusion reported an exception"
+
+    try:
+        app = adsk.core.Application.get()
+        ui  = app.userInterface
+        doc = app.activeDocument
+        cam = adsk.cam.CAM.cast(doc.products.itemByProductType(constCAMProductId))
+        parameters = program.parameters
+
+        # Generate filename from first setup's name
+        firstSetup = setups[0]
+        nameList = firstSetup.name.split(':')
+        fname = nameList[-1].strip() + "-COMBINED"
+        
+        # Verify file name is valid by creating it now
+        fileExt = parameters.itemByName("nc_program_nc_extension").value.value
+        path = outputFolder + "/" + fname + fileExt
+        try:
+            pathlib.Path(outputFolder).mkdir(parents=True, exist_ok=True)
+            fileHead = open(path, "w")
+        except Exception as exc:
+            return "Unable to create output file '" + path + "'. Make sure the setup name is valid as a file name."
+        
+        # Make sure toolpaths are valid for all setups
+        for setup in setups:
+            if not cam.checkToolpath(setup):
+                genStat = cam.generateToolpath(setup)
+                while not genStat.isGenerationCompleted:
+                    time.sleep(.1)
+
+        # Collect all operations from all setups and group by tool number
+        # Each entry: (tool_number, setup, operation)
+        allOps = []
+        for setup in setups:
+            for i in range(setup.allOperations.count):
+                op = setup.allOperations.item(i)
+                if op.isSuppressed:
+                    continue
+                # Get tool number (Manual NC operations don't have tools)
+                if op.hasToolpath:
+                    toolNum = int(op.tool.parameters.itemByName("tool_number").value.value)
+                else:
+                    # Manual NC - assign tool number 0 or find adjacent operation's tool
+                    toolNum = 0
+                allOps.append((toolNum, setup, op))
+        
+        if len(allOps) == 0:
+            fileHead.close()
+            os.remove(path)
+            return "No operations found in selected setups"
+
+        # Sort operations by tool number, maintaining order within same tool
+        # This groups all operations using the same tool together
+        allOps.sort(key=lambda x: x[0])
+
+        # Build list of operations grouped by tool for processing
+        # We need to process in groups where each group can be sent to postProcess
+        opGroups = []  # List of (toolNum, [(setup, op), ...])
+        currentTool = None
+        currentGroup = []
+        
+        for toolNum, setup, op in allOps:
+            if currentTool != toolNum:
+                if currentGroup:
+                    opGroups.append((currentTool, currentGroup))
+                currentTool = toolNum
+                currentGroup = [(setup, op)]
+            else:
+                currentGroup.append((setup, op))
+        
+        if currentGroup:
+            opGroups.append((currentTool, currentGroup))
+
+        # Set up temporary output location
+        opName = constOpTmpFile
+        opFolder = tempfile.gettempdir().replace("\\", "/")
+        opPath = opFolder + "/" + opName + fileExt
+        
+        parameters.itemByName("nc_program_openInEditor").value.value = False
+        AssignOutputFolder(parameters, opFolder)
+        parameters.itemByName("nc_program_filename").value.value = opName
+        parameters.itemByName("nc_program_name").value.value = fname
+
+        # Set up for file processing
+        fileBody = open(opFolder + "/" + constBodyTmpFile + fileExt, "w")
+        fFirst = True
+        fBlankOk = False
+        lineNum = 10
+        regToolComment = re.compile(r"\(T[0-9]+\s")
+        fFastZenabled = docSettings["fastZ"]
+        regBody = re.compile(r""
+            r"(?P<N>N[0-9]+ *)?" # line number
+            r"(?P<line>"         # line w/o number
+            r"(M(?P<M>[0-9]+) *)?" # M-code
+            r"(G(?P<G>[0-9]+) *)?" # G-code
+            r"(T(?P<T>[0-9]+))?" # Tool
+            r".+)",              # to end of line
+            re.IGNORECASE | re.DOTALL)
+        toolChange = docSettings["toolChange"]
+        fToolChangeNum = False
+        if len(toolChange) != 0:
+            toolChange = toolChange.replace(":", "\n")
+            toolChange += "\n"
+            match = regBody.match(toolChange).groupdict()
+            if match["N"] != None:
+                fToolChangeNum = True
+                toolChange = match["line"]
+                toolChange = toolChange.splitlines(True)
+        
+        # Parse end code list
+        endCodes = docSettings["endCodes"]
+        endGcodes = re.findall("G([0-9]+)", endCodes)
+        endGcodeSet = set()
+        for code in endGcodes:
+            endGcodeSet.add(int(code))
+        endMcodes = re.findall("M([0-9]+)", endCodes)
+        endMcodeSet = set()
+        for code in endMcodes:
+            endMcodeSet.add(int(code))
+
+        if fFastZenabled:
+            regParseLine = re.compile(r""
+                r"(G(?P<G>[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
+                r"(?P<XY>((X-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
+                r"((Y-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?)"
+                r"(Z(?P<Z>-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?"
+                r"(F(?P<F>-?[0-9]+(\.[0-9]*)?)[^XYZF]*)?",
+                re.IGNORECASE)
+            regGcodes = re.compile(r"G([0-9]+(?:\.[0-9]*)?)")
+
+        tailGcode = ""
+        pendingStopCmds = []
+        totalOps = sum(len(group[1]) for group in opGroups)
+        processedOps = 0
+
+        # Track current machine state to suppress redundant commands
+        currentToolNum = None
+        currentSpindleSpeed = None
+        currentSetup = None  # Track current setup to detect WCS changes
+        
+        # Regex patterns for detecting commands to potentially suppress
+        regSpindleSpeed = re.compile(r'\bS(\d+)', re.IGNORECASE)
+        regSpindleStart = re.compile(r'\bM\s*3\b', re.IGNORECASE)
+        regCoolantOff = re.compile(r'\bM\s*9\b', re.IGNORECASE)
+        regCoolantOn = re.compile(r'\bM\s*[78]\b', re.IGNORECASE)
+        regDwell = re.compile(r'\bG\s*4\b', re.IGNORECASE)
+        regReturnHome = re.compile(r'\bG\s*(28|53)\b', re.IGNORECASE)  # G28 or G53 (machine coords)
+        # Fusion Personal Use warning message to suppress
+        regPersonalUseWarning = re.compile(r'\(When using Fusion for Personal Use|\(moves is reduced to match|\(which can increase machining time|\(are available with a Fusion Subscription', re.IGNORECASE)
+
+        # Process each tool group
+        for toolNum, opsInGroup in opGroups:
+            # Determine if this is a real tool change (first op in group with different tool)
+            fRealToolChange = (currentToolNum is None or currentToolNum != toolNum)
+            # Update current tool at start of group so subsequent ops know they're same tool
+            currentToolNum = toolNum
+            
+            # Process each operation in this tool group
+            for idx, (setup, op) in enumerate(opsInGroup):
+                # Only the first operation in the group gets the actual tool change
+                fRealToolChangeThisOp = fRealToolChange and (idx == 0)
+                
+                # Detect if WCS is changing (different setup = different WCS)
+                fWcsChanging = (currentSetup is not None and currentSetup != setup)
+                
+                if progress and progress.wasCancelled:
+                    fileBody.close()
+                    fileHead.close()
+                    os.remove(fileBody.name)
+                    os.remove(path)
+                    return "Cancelled by user"
+
+                # Post process this operation
+                opList = [op]
+                
+                retries = docSettings["postRetries"]
+                delay = docSettings["initialDelay"]
+                while True:
+                    try:
+                        program.operations = opList
+                        if not program.postProcess(adsk.cam.NCProgramPostProcessOptions.create()):
+                            retVal = "Fusion reported an error processing operation: " + op.name
+                            return retVal
+                    except Exception as exc:
+                        retVal += " in operation " + op.name + ": " + str(exc)
+                        return retVal
+
+                    time.sleep(delay)
+                    try:
+                        fileOp = open(opPath, encoding="utf8", errors='replace')
+                        break
+                    except:
+                        delay *= 2
+                        retries -= 1
+                        if retries > 0:
+                            continue
+                        return "Unable to open " + opPath
+                
+                # Parse and combine the gcode (similar to PostProcessSetup)
+                if not fFirst and fBlankOk:
+                    fileBody.write("\n")
+
+                for stopCmd in pendingStopCmds:
+                    fileBody.write("M9 (Coolant off for program stop)\n")
+                    fileBody.write(stopCmd)
+                pendingStopCmds = []
+
+                # % at start only
+                line = fileOp.readline()
+                if len(line) > 0 and line[0] == "%":
+                    if fFirst:
+                        fileHead.write(line)
+                    line = fileOp.readline()
+
+                # Header comments and tool info
+                while len(line) > 0 and (line[0] == "(" or line[0] == "O" or line[0] == "\n"):
+                    if line[0] == "\n":
+                        fBlankOk = True
+                    # Skip Fusion Personal Use warning comments
+                    if regPersonalUseWarning.search(line):
+                        line = fileOp.readline()
+                        continue
+                    if regToolComment.match(line) != None:
+                        fileHead.write(line)
+                        line = fileOp.readline()
+                        break
+                    if fFirst:
+                        pos = line.upper().find(opName.upper())
+                        if pos != -1:
+                            pos += len(opName)
+                            line = line[0] + fname + line[pos:]
+                        fileHead.write(line)
+                    line = fileOp.readline()
+
+                if len(line) == 0:
+                    fileOp.close()
+                    os.remove(fileOp.name)
+                    fileOp = None
+                    processedOps += 1
+                    if progress:
+                        progress.progressValue = int((processedOps / totalOps) * len(setups))
+                    continue
+
+                # Find tool change line and process preamble
+                # Track whether this operation uses the same tool as previous
+                # Within a tool group, only the first operation needs full setup
+                fSuppressToolSetup = (idx > 0)  # Not the first operation in this tool group
+                
+                toolChangePattern = re.compile(r'(?=.*\bM\s*6\b)(?=.*\bT\s*\d{1,3}\b)', re.IGNORECASE)
+                
+                # For same-tool operations, we need to skip the preamble (coolant off, return home, 
+                # tool change, spindle start, dwell, coolant on) and go straight to motion
+                fInPreamble = True
+                fFoundToolChange = False
+                fPreambleComplete = False
+                
+                while True:
+                    if len(line) == 0:
+                        break
+                    match = regBody.match(line)
+                    if match is None:
+                        line = fileOp.readline()
+                        continue
+                    match = match.groupdict()
+                    lineContent = match["line"]
+                    fNum = match["N"] != None
+
+                    # Check if this is the tool change line
+                    if toolChangePattern.search(lineContent):
+                        fFoundToolChange = True
+                        # Extract spindle speed from upcoming lines if this is a real tool change
+                        if fRealToolChangeThisOp:
+                            # Add tool change G-codes (full sequence including M9)
+                            if not fFirst and len(toolChange) != 0:
+                                if fToolChangeNum:
+                                    for code in toolChange:
+                                        fileBody.write("N" + str(lineNum) + " " + code)
+                                        lineNum += constLineNumInc
+                                else:
+                                    fileBody.write(toolChange)
+                            elif fFirst and not docSettings["skipFirstToolchange"] and len(toolChange) != 0:
+                                if fToolChangeNum:
+                                    for code in toolChange:
+                                        fileBody.write("N" + str(lineNum) + " " + code)
+                                        lineNum += constLineNumInc
+                                else:
+                                    fileBody.write(toolChange)
+                        elif fWcsChanging and len(toolChange) != 0:
+                            # Same tool but WCS changing - output G28/G30 for safety, but NOT M9
+                            # Parse toolChange and filter out coolant commands
+                            toolChangeLines = toolChange if isinstance(toolChange, list) else toolChange.strip().split('\n')
+                            for code in toolChangeLines:
+                                codeStr = code.strip() if isinstance(code, str) else code
+                                # Skip M9 (coolant off) - we want coolant to stay on
+                                if regCoolantOff.search(codeStr):
+                                    continue
+                                # Output G28, G30, or other return-home codes
+                                if codeStr:
+                                    if fToolChangeNum:
+                                        fileBody.write("N" + str(lineNum) + " " + codeStr + "\n")
+                                        lineNum += constLineNumInc
+                                    else:
+                                        fileBody.write(codeStr + "\n")
+                        break
+
+                    # Suppress preamble lines when not changing tools
+                    if fSuppressToolSetup:
+                        # Skip coolant off (M9)
+                        if regCoolantOff.search(lineContent):
+                            line = fileOp.readline()
+                            continue
+                        # Skip return home (G28) UNLESS WCS is changing (safety measure)
+                        if regReturnHome.search(lineContent) and not fWcsChanging:
+                            line = fileOp.readline()
+                            continue
+                    
+                    # Skip Fusion Personal Use warning comments
+                    if regPersonalUseWarning.search(lineContent):
+                        line = fileOp.readline()
+                        continue
+                    
+                    # Keep comments and program stop commands
+                    if fFirst or lineContent[0] == "(" or re.search(r'\bM\s*[01]\b', lineContent, re.IGNORECASE):
+                        if fNum:
+                            fileBody.write("N" + str(lineNum) + " ")
+                            lineNum += constLineNumInc
+                        fileBody.write(lineContent)
+                    line = fileOp.readline()
+                    if len(line) == 0:
+                        break
+                    if line[0] == "\n":
+                        fBlankOk = True
+
+                # Process body - now we're past the tool change line
+                fFastZ = fFastZenabled
+                Gcode = None
+                Zcur = None
+                Zfeed = None
+                fZfeedNotSet = True
+                feedCur = 0
+                fNeedFeed = False
+                fLockSpeed = False
+                
+                # Track if we're still in the post-tool-change setup phase
+                # (spindle start, dwell, coolant on, WCS selection)
+                fInToolSetup = True
+                linesSinceToolChange = 0
+
+                while len(line) > 0:
+                    match = regBody.match(line)
+                    if match is None:
+                        lineFull = fileOp.readline()
+                        if len(lineFull) == 0:
+                            break
+                        line = lineFull
+                        continue
+                    
+                    match = match.groupdict()
+                    line = match["line"]
+                    fNum = match["N"] != None
+                    
+                    linesSinceToolChange += 1
+                    
+                    # After ~15 lines from tool change, we're past the setup phase
+                    if linesSinceToolChange > 15:
+                        fInToolSetup = False
+
+                    # Check for end markers
+                    endMark = match["M"]
+                    if endMark != None:
+                        endMark = int(endMark)
+                        if endMark in endMcodeSet:
+                            break
+                        if endMark == 49:
+                            fLockSpeed = True
+                        elif endMark == 48:
+                            fLockSpeed = False
+                    endMark = match["G"]
+                    if endMark != None:
+                        endMark = int(endMark)
+                        if endMark in endGcodeSet:
+                            break
+
+                    # Determine if this line should be skipped
+                    skipCurrentLine = False
+                    
+                    # Skip first tool change if option enabled
+                    if fFirst and docSettings["skipFirstToolchange"]:
+                        if toolChangePattern.search(line):
+                            skipCurrentLine = True
+                    
+                    # When tool isn't actually changing, suppress setup commands
+                    if fSuppressToolSetup and fInToolSetup:
+                        # Skip tool change line (T# M6)
+                        if toolChangePattern.search(line):
+                            skipCurrentLine = True
+                        # Skip spindle speed + start (S#### M3) if same speed
+                        elif regSpindleStart.search(line):
+                            speedMatch = regSpindleSpeed.search(line)
+                            if speedMatch:
+                                newSpeed = int(speedMatch.group(1))
+                                if newSpeed == currentSpindleSpeed:
+                                    skipCurrentLine = True
+                                else:
+                                    currentSpindleSpeed = newSpeed
+                            else:
+                                # M3 without S - skip if spindle already running
+                                if currentSpindleSpeed is not None:
+                                    skipCurrentLine = True
+                        # Skip dwell (G4) - only used for spindle spinup
+                        elif regDwell.search(line):
+                            skipCurrentLine = True
+                        # Skip coolant commands (M7, M8) - coolant still on from previous op
+                        elif regCoolantOn.search(line):
+                            skipCurrentLine = True
+                    else:
+                        # Track spindle speed for future comparisons
+                        if regSpindleStart.search(line):
+                            speedMatch = regSpindleSpeed.search(line)
+                            if speedMatch:
+                                currentSpindleSpeed = int(speedMatch.group(1))
+                    
+                    # Once we see actual motion (G0, G1) we're past setup
+                    if re.search(r'\bG\s*[01]\b', line, re.IGNORECASE) and re.search(r'[XYZ]', line, re.IGNORECASE):
+                        fInToolSetup = False
+                    
+                    if not skipCurrentLine:
+                        if fNum:
+                            fileBody.write("N" + str(lineNum) + " ")
+                            lineNum += constLineNumInc
+                        fileBody.write(line)
+                    
+                    lineFull = fileOp.readline()
+                    if len(lineFull) == 0:
+                        break
+                    match = regBody.match(lineFull)
+                    if match is None:
+                        line = lineFull
+                        continue
+                    match = match.groupdict()
+                    line = match["line"]
+                    fNum = match["N"] != None
+
+                # Save tail from first operation
+                tailContent = fileOp.read()
+                tailLines = tailContent.splitlines(True)
+                remainingTail = []
+                for tailLine in tailLines:
+                    if re.search(r'\bM\s*[01]\b', tailLine, re.IGNORECASE):
+                        match = regBody.match(tailLine)
+                        if match:
+                            match = match.groupdict()
+                            if match["N"] != None:
+                                stopCmd = "N" + str(lineNum) + " " + match["line"]
+                                lineNum += constLineNumInc
+                            else:
+                                stopCmd = tailLine
+                            pendingStopCmds.append(stopCmd)
+                    else:
+                        remainingTail.append(tailLine)
+                
+                if fFirst:
+                    tailGcode = "".join(remainingTail)
+                fFirst = False
+                currentSetup = setup  # Update current setup for WCS change detection
+                fileOp.close()
+                os.remove(fileOp.name)
+                fileOp = None
+                
+                processedOps += 1
+                if progress:
+                    progress.progressValue = int((processedOps / totalOps) * len(setups))
+
+        # Write remaining pending commands
+        for stopCmd in pendingStopCmds:
+            fileBody.write("M9 (Coolant off for program stop)\n")
+            fileBody.write(stopCmd)
+
+        # Add tail
+        if len(tailGcode) != 0:
+            tailGcode = tailGcode.splitlines(True)
+            for code in tailGcode:
+                match = regBody.match(code)
+                if match:
+                    match = match.groupdict()
+                    if match["N"] != None:
+                        fileBody.write("N" + str(lineNum) + " " + match["line"])
+                        lineNum += constLineNumInc
+                    else:
+                        fileBody.write(code)
+                else:
+                    fileBody.write(code)
+
+        # Copy body to head
+        fileBody.close()
+        fileBody = open(fileBody.name)
+        while True:
+            block = fileBody.read(10240)
+            if len(block) == 0:
+                break
+            fileHead.write(block)
+        fileBody.close()
+        os.remove(fileBody.name)
+        fileBody = None
+        fileHead.close()
+        fileHead = None
+
+        return None
+
+    except:
+        if fileHead:
+            try:
+                fileHead.close()
+                os.remove(fileHead.name)
+            except:
+                pass
+        if fileBody:
+            try:
+                fileBody.close()
+                os.remove(fileBody.name)
+            except:
+                pass
+        if fileOp:
+            try:
+                fileOp.close()
+                os.remove(fileOp.name)
+            except:
+                pass
+        if ui:
+            retVal += " " + traceback.format_exc()
+        return retVal
+
 
 def PostProcessSetup(fname, setup, setupFolder, docSettings, program, debugComments=None):
     ui = None
@@ -1232,6 +1832,9 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings, program, debugComme
                 re.IGNORECASE)
             regGcodes = re.compile(r"G([0-9]+(?:\.[0-9]*)?)")
 
+        # Pending M0/M1 commands to write at start of next operation
+        pendingStopCmds = []
+
         i = 0
         ops = setup.allOperations
         while i < ops.count:
@@ -1244,24 +1847,38 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings, program, debugComme
             # with a manual operation. Group it with current operation.
             # Or if first, group it with subsequent ones.
             # Also group together operations with the same tool number
+            # BUT: Don't group Manual NC (no toolpath) - process them separately
             opHasTool = None
             curTool = -1
             hasTool = op.hasToolpath
-            if hasTool:
+            
+            # If this is a Manual NC operation (no toolpath), process it alone
+            if not hasTool:
+                opList = [op]
+                # Find the next operation with a toolpath to get tool info for grouping
+                while i < ops.count:
+                    nextOp = ops[i]
+                    if not nextOp.isSuppressed and nextOp.hasToolpath:
+                        opHasTool = nextOp
+                        opList.append(nextOp)
+                        curTool = nextOp.tool.parameters.itemByName("tool_number").value.value
+                        i += 1
+                        break
+                    i += 1
+            else:
                 opHasTool = op
                 curTool = op.tool.parameters.itemByName("tool_number").value.value
-            opList = [op]
-            while i < ops.count:
-                op = ops[i]
-                if not op.isSuppressed:
-                    if op.hasToolpath and op.tool.parameters.itemByName("tool_number").value.value != curTool:
-                        if not hasTool:
-                            opList.append(op)
-                            opHasTool = op
-                            i += 1
-                        break
-                    opList.append(op)
-                i += 1
+                opList = [op]
+                while i < ops.count:
+                    op = ops[i]
+                    if not op.isSuppressed:
+                        # Stop grouping if we hit a Manual NC (no toolpath) or different tool
+                        if not op.hasToolpath:
+                            break  # Don't include Manual NC in this group
+                        if op.tool.parameters.itemByName("tool_number").value.value != curTool:
+                            break
+                        opList.append(op)
+                    i += 1
 
             retries = docSettings["postRetries"]
             delay = docSettings["initialDelay"]
@@ -1326,6 +1943,13 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings, program, debugComme
             if not fFirst and fBlankOk:
                 fileBody.write("\n")
 
+            # Write any pending M0/M1 commands from previous operation's Manual NC
+            # Add M9 (coolant off) before each stop command for safety
+            for stopCmd in pendingStopCmds:
+                fileBody.write("M9 (Coolant off for program stop)\n")
+                fileBody.write(stopCmd)
+            pendingStopCmds = []
+
             # % at start only
             line = fileOp.readline()
             if line[0] == "%":
@@ -1385,7 +2009,8 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings, program, debugComme
                             fileBody.write(toolChange)
                     break
 
-                if fFirst or line[0] == "(":
+                # Preserve line if: first operation, comment, or M0/M1 (program stop) command
+                if fFirst or line[0] == "(" or re.search(r'\bM\s*[01]\b', line, re.IGNORECASE):
                     if (fNum):
                         fileBody.write("N" + str(lineNum) + " ")
                         lineNum += constLineNumInc
@@ -1540,13 +2165,36 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings, program, debugComme
                 line = match["line"]        # filter off line number if present
                 fNum = match["N"] != None
 
-            # Found tail of program
+            # Found tail of program - scan for M0/M1 commands to preserve in sequence
+            tailContent = lineFull + fileOp.read()
+            tailLines = tailContent.splitlines(True)
+            remainingTail = []
+            for tailLine in tailLines:
+                if re.search(r'\bM\s*[01]\b', tailLine, re.IGNORECASE):
+                    # Preserve M0/M1 (program stop) commands from Manual NC operations
+                    # Save them to be written at the START of next operation
+                    match = regBody.match(tailLine).groupdict()
+                    if match["N"] != None:
+                        stopCmd = "N" + str(lineNum) + " " + match["line"]
+                        lineNum += constLineNumInc
+                    else:
+                        stopCmd = tailLine
+                    pendingStopCmds.append(stopCmd)
+                else:
+                    remainingTail.append(tailLine)
+            
             if fFirst:
-                tailGcode = lineFull + fileOp.read()
+                # Save remaining tail (without M0/M1) for the very end
+                tailGcode = "".join(remainingTail)
             fFirst = False
             fileOp.close()
             os.remove(fileOp.name)
             fileOp = None
+
+        # Write any remaining pending M0/M1 commands before final tail
+        for stopCmd in pendingStopCmds:
+            fileBody.write("M9 (Coolant off for program stop)\n")
+            fileBody.write(stopCmd)
 
         # Completed all operations, add tail
         # Update line numbers if present
