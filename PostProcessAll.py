@@ -90,7 +90,7 @@ def run(context):
 
     except:
         if ui:
-            ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
+            ui.messageBox(f'Failed:\n{traceback.format_exc()}')
 
 
 def stop(context):
@@ -110,7 +110,7 @@ def stop(context):
             cmdControl.deleteMe()
     except:
         if ui:
-            ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))	
+            ui.messageBox(f'Failed:\n{traceback.format_exc()}')
 
 
 class SettingsManager:
@@ -134,21 +134,17 @@ class SettingsManager:
         # Document does not have valid settings, get defaults
         if not self.default:
             # Haven't read the settings file yet
-            file = None
             try:
-                file = open(self.GetPath())
-                self.default = json.load(file)
-                # never allow delFiles or delFolder to default to True
-                self.default["delFiles"] = False
-                self.default["delFolder"] = False
-                if self.default["version"] != version:
-                    self.UpdateSettings(defaultSettings, self.default)
+                with open(self.GetPath()) as file:
+                    self.default = json.load(file)
+                    # never allow delFiles or delFolder to default to True
+                    self.default["delFiles"] = False
+                    self.default["delFolder"] = False
+                    if self.default["version"] != version:
+                        self.UpdateSettings(defaultSettings, self.default)
             except Exception:
                 self.default = dict(defaultSettings)
                 self.fMustSave = True
-            finally:
-                if file:
-                    file.close
         
         if not docSettings:
             docSettings = dict(self.default)
@@ -164,9 +160,8 @@ class SettingsManager:
         self.default["delFolder"] = False
         try:
             strSettings = json.dumps(docSettings)
-            file = open(self.GetPath(), "w")
-            file.write(strSettings)
-            file.close
+            with open(self.GetPath(), "w") as file:
+                file.write(strSettings)
         except Exception:
             pass
 
@@ -220,7 +215,7 @@ def InitAddIn():
 
     except:
         if ui:
-            ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
+            ui.messageBox(f'Failed:\n{traceback.format_exc()}')
 
 
 def CountOutputFolderFiles(folder, limit, fileExt):
@@ -699,7 +694,7 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
             handlers.append(onValidateInputs)
         except:
             ui = app.userInterface
-            ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
+            ui.messageBox(f'Failed:\n{traceback.format_exc()}')
 
 # Event handler for the inputChanged event.
 class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
@@ -756,7 +751,7 @@ class CommandInputChangedHandler(adsk.core.InputChangedEventHandler):
                 inputs.itemById("skipFirstToolchange").isEnabled = input.value
 
         except:
-            ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
+            ui.messageBox(f'Failed:\n{traceback.format_exc()}')
 
 
 # Event handler for the validateInputs event.
@@ -774,7 +769,7 @@ class CommandValidateInputsHandler(adsk.core.ValidateInputsEventHandler):
             inputs = eventArgs.firingEvent.sender.commandInputs
 
         except:
-            ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
+            ui.messageBox(f'Failed:\n{traceback.format_exc()}')
 
 
 # Event handler for the execute event.
@@ -811,20 +806,20 @@ def GetOriginLocationSuffix(setup, debugComments=None):
     """
     try:
         if debugComments is not None:
-            debugComments.append("(DEBUG: Analyzing origin location for setup: {})\n".format(setup.name))
+            debugComments.append(f"(DEBUG: Analyzing origin location for setup: {setup.name})\n")
             # List all attributes of setup for debugging
             attrs = [attr for attr in dir(setup) if not attr.startswith('_')]
-            debugComments.append("(DEBUG: Setup attributes: {})\n".format(", ".join(attrs[:20])))  # first 20
+            debugComments.append(f"(DEBUG: Setup attributes: {', '.join(attrs[:20])})\n")  # first 20
             if len(attrs) > 20:
-                debugComments.append("(DEBUG: Setup attributes (cont): {})\n".format(", ".join(attrs[20:40])))
+                debugComments.append(f"(DEBUG: Setup attributes (cont): {', '.join(attrs[20:40])})\n")
             if len(attrs) > 40:
-                debugComments.append("(DEBUG: Setup attributes (cont): {})\n".format(", ".join(attrs[40:])))
+                debugComments.append(f"(DEBUG: Setup attributes (cont): {', '.join(attrs[40:])})\n")
         
         # Try to access the WCS (Work Coordinate System)
         # The stock offset point is typically in setup.parameters
         parameters = setup.parameters
         if debugComments is not None:
-            debugComments.append("(DEBUG: setup.parameters exists = {})\n".format(parameters is not None))
+            debugComments.append(f"(DEBUG: setup.parameters exists = {parameters is not None})\n")
         
         if not parameters:
             return ""
@@ -844,7 +839,7 @@ def GetOriginLocationSuffix(setup, debugComments=None):
                 param = parameters.itemByName(paramName)
                 if param:
                     if debugComments is not None:
-                        debugComments.append("(DEBUG: Found parameter: {} = {})\n".format(paramName, param.value.value))
+                        debugComments.append(f"(DEBUG: Found parameter: {paramName} = {param.value.value})\n")
             except:
                 pass
         
@@ -854,11 +849,11 @@ def GetOriginLocationSuffix(setup, debugComments=None):
             if boxPointParam:
                 stockPoint = boxPointParam.value.value
                 if debugComments is not None:
-                    debugComments.append("(DEBUG: wcs_origin_boxPoint value = {})\n".format(stockPoint))
-                    debugComments.append("(DEBUG: wcs_origin_boxPoint type = {})\n".format(type(stockPoint).__name__))
+                    debugComments.append(f"(DEBUG: wcs_origin_boxPoint value = {stockPoint})\n")
+                    debugComments.append(f"(DEBUG: wcs_origin_boxPoint type = {type(stockPoint).__name__})\n")
         except Exception as e:
             if debugComments is not None:
-                debugComments.append("(DEBUG: Error accessing wcs_origin_boxPoint: {})\n".format(str(e)))
+                debugComments.append(f"(DEBUG: Error accessing wcs_origin_boxPoint: {e})\n")
         
         if not stockPoint:
             if debugComments is not None:
@@ -869,7 +864,7 @@ def GetOriginLocationSuffix(setup, debugComments=None):
                     for i in range(min(parameters.count, 30)):  # first 30 params
                         param = parameters.item(i)
                         allParams.append(param.name)
-                    debugComments.append("(DEBUG: Available parameters: {})\n".format(", ".join(allParams)))
+                    debugComments.append(f"(DEBUG: Available parameters: {', '.join(allParams)})\n")
                 except:
                     pass
             return ""
@@ -879,14 +874,14 @@ def GetOriginLocationSuffix(setup, debugComments=None):
         # Where the number represents the XY corner position
         
         if debugComments is not None:
-            debugComments.append("(DEBUG: stockPoint string value = '{}', type = {})\n".format(stockPoint, type(stockPoint).__name__))
+            debugComments.append(f"(DEBUG: stockPoint string value = '{stockPoint}', type = {type(stockPoint).__name__})\n")
         
         # Parse the string to extract Z position and corner number
         stockPointStr = str(stockPoint).lower().strip()
         parts = stockPointStr.split()
         
         if debugComments is not None:
-            debugComments.append("(DEBUG: Parsed parts = {})\n".format(parts))
+            debugComments.append(f"(DEBUG: Parsed parts = {parts})\n")
         
         if len(parts) < 2:
             if debugComments is not None:
@@ -902,7 +897,7 @@ def GetOriginLocationSuffix(setup, debugComments=None):
             return ""
         
         if debugComments is not None:
-            debugComments.append("(DEBUG: Z position = '{}', corner number = {})\n".format(zPos, cornerNum))
+            debugComments.append(f"(DEBUG: Z position = '{zPos}', corner number = {cornerNum})\n")
         
         # Map corner numbers to XY positions
         # 0 = Center, 1 = Front-Left, 2 = Front-Right, 3 = Back-Left, 4 = Back-Right
@@ -918,31 +913,31 @@ def GetOriginLocationSuffix(setup, debugComments=None):
         
         if xyPos is None:
             if debugComments is not None:
-                debugComments.append("(DEBUG: Unknown corner number: {})\n".format(cornerNum))
+                debugComments.append(f"(DEBUG: Unknown corner number: {cornerNum})\n")
             return ""
         
         # Build the suffix
         suffix = ""
         if zPos == "top":
             if xyPos:
-                suffix = "-" + xyPos + "-TOP"
+                suffix = f"-{xyPos}-TOP"
             else:
                 suffix = "-TOP"
         elif zPos == "bottom":
             if xyPos:
-                suffix = "-" + xyPos + "-BOT"
+                suffix = f"-{xyPos}-BOT"
             else:
                 suffix = "-BOT"
         
         if debugComments is not None:
-            debugComments.append("(DEBUG: Final suffix = '{}')\n".format(suffix))
+            debugComments.append(f"(DEBUG: Final suffix = '{suffix}')\n")
         
         return suffix
         
     except Exception as e:
         # If any error occurs, log it and return empty string
         if debugComments is not None:
-            debugComments.append("(DEBUG: ERROR in GetOriginLocationSuffix: {})\n".format(str(e)))
+            debugComments.append(f"(DEBUG: ERROR in GetOriginLocationSuffix: {e})\n")
         return ""
 
 
@@ -994,11 +989,11 @@ def PerformPostProcess(docSettings, setups):
                 if strMsg:
                     docSettings["delFolder"] = False
                     strMsg = (
-                        "The output folder contains {}. "
+                        f"The output folder contains {strMsg}. "
                         "It will not be deleted. You may wish to make sure you selected "
                         "the correct folder. If you want the folder deleted, you must "
                         "do it manually."
-                        ).format(strMsg)
+                        )
                     res = ui.messageBox(strMsg, 
                                         constCmdName,
                                         adsk.core.MessageBoxButtonTypes.OKCancelButtonType,
@@ -1014,7 +1009,6 @@ def PerformPostProcess(docSettings, setups):
 
             progress = ui.createProgressDialog()
             progress.isCancelButtonShown = True
-            progressMsg = "{} files written to " + outputFolder
             progress.show("Post Processing...", "", 0, len(setups))
             progress.progressValue = 1 # try to get it to display
             progress.progressValue = 0
@@ -1090,10 +1084,10 @@ def PerformPostProcess(docSettings, setups):
                         cntFiles += 1
                     else:
                         cntSkipped += 1
-                        lstSkipped += "\nFailed on setup " + setup.name + ": " + status
+                        lstSkipped += f"\nFailed on setup {setup.name}: {status}"
                         
                 cntSetups += 1
-                progress.message = progressMsg.format(cntFiles)
+                progress.message = f"{cntFiles} files written to {outputFolder}"
                 progress.progressValue = cntSetups
 
             progress.hide()
@@ -1102,7 +1096,7 @@ def PerformPostProcess(docSettings, setups):
 
         # done with setups, report results
         if cntSkipped != 0:
-            ui.messageBox("{} files were written. {} Setups were skipped due to error:{}".format(cntFiles, cntSkipped, lstSkipped), 
+            ui.messageBox(f"{cntFiles} files were written. {cntSkipped} Setups were skipped due to error:{lstSkipped}", 
                 constCmdName, 
                 adsk.core.MessageBoxButtonTypes.OKButtonType,
                 adsk.core.MessageBoxIconTypes.WarningIconType)
@@ -1118,7 +1112,7 @@ def PerformPostProcess(docSettings, setups):
         if progress:
             progress.hide()
         if ui:
-            ui.messageBox('Failed:\n{}'.format(traceback.format_exc()))
+            ui.messageBox(f'Failed:\n{traceback.format_exc()}')
 
 def PostProcessSetup(fname, setup, setupFolder, docSettings, program, debugComments=None):
     ui = None
@@ -1293,11 +1287,11 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings, program, debugComme
                         if file.startswith(opName):
                             ext = file[len(opName):]
                             if ext != fileExt:
-                                return ("Unable to open output file. "
-                                    "Found the file with extension '{}' instead "
-                                    "of '{}'. Make sure you have the correct file "
+                                return (f"Unable to open output file. "
+                                    f"Found the file with extension '{ext}' instead "
+                                    f"of '{fileExt}'. Make sure you have the correct file "
                                     "extension set in the Post Process All "
-                                    "dialog.".format(ext, fileExt))
+                                    "dialog.")
                             break
                     return "Unable to open " + opPath
             
