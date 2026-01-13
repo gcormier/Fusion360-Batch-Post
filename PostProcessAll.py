@@ -947,8 +947,8 @@ def GetWCSOffsetsSuffix(setup):
     Returns a string like "-WCS124" if multiple WCS are used (e.g., G54, G55, G57),
     or empty string if only one WCS is used or WCS cannot be determined.
     
-    WCS offset mapping: G54=1, G55=2, G56=3, G57=4, G58=5, G59=6
-    (WCS number = G-code - 53)
+    WCS offset mapping: G54=1, G55=2, G56=3, G57=4, G58=5, G59=6, etc.
+    (WCS number = G-code - 53, e.g., G54 = 54 - 53 = 1)
     """
     try:
         ops = setup.allOperations
@@ -967,11 +967,13 @@ def GetWCSOffsetsSuffix(setup):
                 # In Fusion 360, the WCS offset is typically stored in 'job_wcs' parameter
                 # The value is 0-based: 0=G54, 1=G55, 2=G56, etc.
                 wcsParam = op.parameters.itemByName('job_wcs')
-                if wcsParam:
+                if wcsParam is not None and wcsParam.value is not None:
                     wcsValue = wcsParam.value.value
                     # Convert to 1-based WCS number (G54=1, G55=2, etc.)
                     wcsNumber = int(wcsValue) + 1
-                    wcsNumbers.add(wcsNumber)
+                    # Validate the WCS number is positive
+                    if wcsNumber >= 1:
+                        wcsNumbers.add(wcsNumber)
             except:
                 pass
         
@@ -986,6 +988,7 @@ def GetWCSOffsetsSuffix(setup):
         
     except:
         return ""
+
 
 
 def PerformPostProcess(docSettings, setups):
