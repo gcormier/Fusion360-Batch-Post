@@ -1,176 +1,54 @@
-# Post Process All: Fusion CAM Batch Post Add-In
-### New in Version 2: All post processor options are available through `NC Programs`
+# Fusion360-Batch-Post (Enhanced Fork)
 
-### Introduction
-This add-in for Fusion will post process all CAM setups, or any
-selection of setups you choose, at once.
-Each setup is put in a file with the name of the setup. You can
-optionally use a special setup naming convention to put files in
-subfolders. You can also put sequence numbers on the names to maintain
-the order of operations.
+Fork of [TimPaterson/Fusion360-Batch-Post](https://github.com/TimPaterson/Fusion360-Batch-Post) with additional features.
 
-Note that the setup name must be a valid file name. It couldn't,
-for example, be `1/4" end mill` because both the `"` and the `/` are
-special or illegal characters for file names.
+## Enhancements
 
-The add-in creates a new command in the `Manufacture` workspace next to
-the native Post Process command called Post Process All:
+### Combine Setups (Minimize Tool Changes)
 
-![Post Process All](https://raw.githubusercontent.com/TimPaterson/Fusion360-Batch-Post/master/resources/Command/32x32.png)
+When using Fusion for Personal Use with split operations enabled, this feature combines multiple setups into a single output file, **reordering operations by tool number** to minimize tool changes.
 
-### First Run
+**Enable:** Check "Combine setups (minimize tool changes)" in the Personal Use section.
 
-`Post Process All` requires an `NC Program`. The `NC Program` is used to select
-the post processor and to choose the output foldeer for G-code files.
-If you don't have an `NC Program`, `Post Process All` will create one. If you've
-run `Post Process All` before on this design, it will keep the previous
-output folder. Otherwise, you should probably cancel `Post Process All` and set the
-output folder in the `NC Program`.
+**How it works:**
+- Collects all operations from all setups
+- Groups operations by tool number
+- Outputs all operations for Tool 1, then Tool 2, etc.
+- Suppresses redundant commands between same-tool operations
+- Output filename: `<FirstSetupName>-COMBINED.nc`
 
-`Post Process All` will present this dialog:
+**Intelligent command suppression:**
 
-![Dialog Image](https://raw.githubusercontent.com/TimPaterson/Fusion360-Batch-Post/master/ReadMeImages/DialogImage.PNG)
+| Scenario | M9 (Coolant Off) | G28/G53 (Return Home) | Spindle Start | Coolant On | Dwell |
+|----------|------------------|----------------------|---------------|------------|-------|
+| Real tool change | ✅ Output | ✅ Output | ✅ Output | ✅ Output | ✅ Output |
+| Same tool, WCS changing | ❌ Suppressed | ✅ Output (safety) | ❌ Suppressed | ❌ Suppressed | ❌ Suppressed |
+| Same tool, same WCS | ❌ Suppressed | ❌ Suppressed | ❌ Suppressed | ❌ Suppressed | ❌ Suppressed |
 
-At the top you can choose which `NC Program` to use. You may have any 
-number of NC Programs, using them to easily switch between post processors, 
-output folders, or any options. Note that some settings are managed by
-`Post Process All` and will have no effect if you change them. These
-include `Name/number`, `File name`, and `Operations`. The browser may
-mark the `NC Program` with an error symbol, but this can be ignored.
+**WCS Handling:** Each setup in Fusion has its own WCS (G54, G55, etc.). The post processor automatically outputs the correct WCS code for each operation. When transitioning between setups with different WCS (but the same tool), the return-to-home move (G28/G53) is kept for safety while other redundant commands are suppressed.
 
-Once `Post Process All` has been run, all settings will be saved in
-the design. New designs will also be given default settings.
+**Note:** Your `toolChange` setting (e.g., `M9:G28 G91 Z0:G90` or `M9:G0 G53 Z0`) is automatically parsed - M9 is filtered out when not needed, but G28/G53 is kept for safety when changing WCS.
 
-### Subfolders
-You can put the output files into subfolders by using a colon (":") in
-the name. The part of the name to the left of the colon is the folder
-name; multiple colons result in nested subfolders.
+### Append Origin Location to Filename
 
-Here is an example of a design with three components. The name of the
-component appears first, then a colon and the name of a setup for
-that component:
+Automatically appends the WCS origin location to output filenames based on the stock point setting.
 
-![Setup Image](https://raw.githubusercontent.com/TimPaterson/Fusion360-Batch-Post/master/ReadMeImages/SetupImage.PNG)
+**Enable:** Check "Append origin location to filename" in the Personal Use section.
 
-When you run the `Post Process All` command, it will create three
-subfolders in the output folder, named "Cover", "Block", and "Insulator".
-Within these subfolders will be five, three, and five G-code files
-respectively with names like "first long edge", "second long edge", etc.
+**Examples:**
+- Origin at back-right, top of stock → `-BR-TOP`
+- Origin at front-left, bottom of stock → `-FL-BOT`
+- Origin at center XY, top of stock → `-TOP`
+- Origin at center XY, bottom of stock → `-BOT`
 
-### Sequence Numbers
-A sequence number can be added to the front of each file name. This
-provides a reminder of the order of operations and will generally
-keep the files sorted in that order. Sequence numbers start at 1 for
-each folder.
+**Corner positions:** FL (Front-Left), FR (Front-Right), BL (Back-Left), BR (Back-Right)
 
-In the above example, when adding sequence numbers the files in
-the "Block" folder would have the names "1 first edge" and "2 second
-edge".
+If the origin uses a custom location (not a stock corner), nothing is appended.
 
-### Fusion for Personal Use
-The free version of Fusion now has some limitations on G-code
-output: It will not support tool changes, and it slows down all
-moves to feed rate. `Post Process All` can work around the tool change
-limitation and can attempt to restore rapid moves.
+### Personal Use Warning Suppression
 
-In the `Personal Use` section of the `Post Process All` dialog, you will find
-the option to break each setup into individual operations. This 
-is required if you have the free version of Fusion and there
-is a tool change in any setup. `Post Process All` will combine the G-code
-for each operation of a setup back into a single file for that
-setup, hiding this limitation. Since there is no example of a
-tool change in the G-code generated by Fusion, there is a
-box to type in any additional G-codes needed when a tool change 
-is made (such as turning off coolant, etc.).
+Automatically removes the repeated 4-line "When using Fusion for Personal Use..." warning comments from output files.
 
-In addition, you can also select the option to restore rapid (G0) 
-moves. This analysis is experimental and should be reviewed 
-before use (comments are included where the G-code is changed).
-You are responsible for ensuring a tool crash does not occur.
+## Original Documentation
 
-### Rename Setups
-`Post Process All` can perform a search-and-replace on setup names.
-Like post processing, the search will apply to all setups unless you select specific setups
-and check the box `Only selected setups`. This is a great way to collect
-a group of setups into a subfolder, for example.
-
-A special case has been added to make it easy to insert text 
-(such as a folder name) at the beginning of a setup name. If the
-search string is empty, the text in the `Replace with this string` 
-field will be prepended to each setup name.
-
-The search-and-replace is executed immediately when you click the
-![image](https://raw.githubusercontent.com/TimPaterson/Fusion360-Batch-Post/master/resources/Rename/16x16.png)
-icon. You can then cancel 'Post Process All' if that's all you want to do.
-Review the changes to make sure everything looks right, and you can
-use Fusion's `Undo` command if necessary.
-
-### Installation
-To install, start by putting the `PostProcessAll.py` and 
-`PostProcessAll.manifest` files along with
-the `resources` subfolder into a folder on your machine. This can
-be a Git repository or just a copy of the files. (The `ReadMe.md`
-file and `ReadMeImages` folder are not required.) Using Git is
-recommended (newcomers see below) because it makes it easy to
-come back and get updates.
-
-In Fusion, go to the `Tools` tab in the `Design` workspace, or the
-`Utilities` tab in the `Manufacture` workspace. Select the
-`Scripts and Add-Ins` command, which will bring up the `Scripts and Add-Ins` dialog.
-Filter by `Add-Ins`, then click the `+` and select `Script or add-in from device` .
-You can now browse to the folder in which you placed the
-`Post Process All` add-in files.
-
-Once the folder is selected, you will be returned to the `Scripts and Add-Ins` dialog
-and find that `PostProcessAll` now appears in the list.
-Select it in the list, ensure `Run on Startup` is checked, and then
-click the switch in the `Run` column. The dialog closes immediately.
-If you open it again, it should something like this:
-
-![AddIn Image](https://raw.githubusercontent.com/TimPaterson/Fusion360-Batch-Post/master/ReadMeImages/FusionAddIn.PNG)
-
-To see the new command, go to the `Manufacture` workspace and select the
-`Milling` or `Turning`tab. The command appears on the toolbar next to
-the native Post Process command. It also appears in the Actions
-drop-down menu.
-
-**New to Git?** A nice Git GUI is [GitHub Desktop](https://desktop.github.com/download/). 
-You just click `Clone repository...` on the `File` menu, select the `URL` tab, 
-and paste in the address of this web page. That will
-bring in a copy of `Post Process All` that's ready to use. To update, click
-`Pull` on the `Repository` menu.
-
-### Issues
-If `Post Process All` fails, run it again. There seem to be occasional timing 
-issues that usually resolve themselves. It may help to increase the time
-delay for posting operations in the `Advanced` section of the 
-`Post Process All` dialog.
-
-The concatenation and modification of G-code has been only been lightly
-tested, and work is ongoing. Given that there are
-very specific assumptions about what the G-code input will look like,
-it would not be surprising to find problems come up. If you report a 
-problem on the Issues page, be sure to specify what post processor
-you are using and include the G-code files.
-
-### Compatibility
-Compatibility can be an issue if you have Fusion for Personal Use and
-therefore select the `Use individual operations` option. This requires
-parsing the G-code, which is dependent on the post processor you use.
-
-Here is a list of the post processors that have been tested with `Post Process All`.
-The `Review OK?` column means a visual inspection of output, while
-`Tested` means it has been run on the CNC machine. The remaining entries
-are the suggested option settings for that post processor.
-This table is based on user feedback. Please add an issue for
-corrections or additions.
-
-| Post Processor | Review OK? | Tested | Tool change |  Numeric Name | File Ext. |
-|----           | :----: | :----: |----    | :----: |---- |
-| centroid.cps  | Yes | Yes |                        | Yes | .nc  |
-| eding.cps     | Yes | No  | N10 M9:G28             | No  | .cnc |
-| gbrl.cps      | Yes | Yes | M9:G28 G91 Z0:G90      | No  | .nc  |
-| linuxcnc.cps  | Yes | No  | M9 G30                 | No  | .ngc |
-| mach3mill.cps | Yes | Yes |                        | No  | .tap |
-| tinyg.cps     | Yes | Yes |                        | No  | .gcode |
-| tormach.cps   | Yes | Yes | M9 G30                 | No  | .nc  |
+See the [upstream repository](https://github.com/TimPaterson/Fusion360-Batch-Post) for full documentation on base features.

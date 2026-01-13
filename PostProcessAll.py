@@ -481,7 +481,7 @@ class CommandEventHandler(adsk.core.CommandCreatedEventHandler):
                                                           "Combine operations using same tool",
                                                           True,
                                                           "",
-                                                          docSettings["combineTool"])
+                                                          docSettings.get("combineTool", False))
             input.isEnabled = docSettings["splitSetup"] # enable only if using individual operations
             input.tooltip = "Combine Consecutive Operations That Use the Same Tool"
             input.tooltipDescription = (
@@ -1897,7 +1897,7 @@ def PostProcessSetup(fname, setup, setupFolder, docSettings, program, debugComme
                         # Stop grouping if we hit a Manual NC (no toolpath) or different tool
                         if not op.hasToolpath:
                             break  # Don't include Manual NC in this group
-                        if not docSettings["combineTool"] or op.tool.parameters.itemByName("tool_number").value.value != curTool:
+                        if not docSettings.get("combineTool", False) or op.tool.parameters.itemByName("tool_number").value.value != curTool:
                             break
                         opList.append(op)
                     i += 1
